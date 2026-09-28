@@ -1,4 +1,4 @@
-name: RDP
+name: RDP Gaming PC
 
 on:
   workflow_dispatch:
@@ -10,7 +10,10 @@ jobs:
 
     steps:
 
-      - name: Configure Core RDP Settings
+      # ============================================
+      # RDP
+      # ============================================
+      - name: Configure RDP
         shell: powershell
         run: |
           Write-Host "Configurando RDP..."
@@ -42,16 +45,17 @@ jobs:
             protocol=TCP `
             localport=3389
 
-          Restart-Service -Name TermService -Force
+          Restart-Service TermService -Force
 
           Write-Host "RDP configurado."
 
+      # ============================================
+      # USUARIO RDP
+      # ============================================
       - name: Create RDP User
         shell: powershell
         run: |
           Write-Host "Criando usuário RDP..."
-
-          Add-Type -AssemblyName System.Security
 
           $charSet = @{
               Upper   = [char[]](65..90)
@@ -86,7 +90,7 @@ jobs:
             -Password $securePass `
             -AccountNeverExpires `
             -PasswordNeverExpires `
-            -Description "RDP User"
+            -Description "Gaming RDP User"
 
           Add-LocalGroupMember `
             -Group "Administrators" `
@@ -99,60 +103,224 @@ jobs:
           "RDP_USERNAME=RDP" >> $env:GITHUB_ENV
           "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
-          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
-              Write-Error "Falha ao criar usuário RDP."
+          Write-Host "Usuário criado."
+
+      # ============================================
+      # WINDOWS GAMING OPTIMIZATION
+      # ============================================
+      - name: Optimize Windows for Gaming
+        shell: powershell
+        run: |
+          Write-Host "Otimizando Windows para jogos..."
+
+          # Plano de energia
+          powercfg /setactive SCHEME_MIN
+
+          # Game Mode
+          New-Item `
+            -Path "HKCU:\Software\Microsoft\GameBar" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            -Path "HKCU:\Software\Microsoft\GameBar" `
+            -Name "AllowAutoGameMode" `
+            -Type DWord `
+            -Value 1 `
+            -Force
+
+          Set-ItemProperty `
+            -Path "HKCU:\Software\Microsoft\GameBar" `
+            -Name "AutoGameModeEnabled" `
+            -Type DWord `
+            -Value 1 `
+            -Force
+
+          # Desativar Game DVR
+          New-Item `
+            -Path "HKCU:\System\GameConfigStore" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            -Path "HKCU:\System\GameConfigStore" `
+            -Name "GameDVR_Enabled" `
+            -Type DWord `
+            -Value 0 `
+            -Force
+
+          New-Item `
+            -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" `
+            -Name "AppCaptureEnabled" `
+            -Type DWord `
+            -Value 0 `
+            -Force
+
+          # Menos efeitos visuais
+          New-Item `
+            -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" `
+            -Name "VisualFXSetting" `
+            -Type DWord `
+            -Value 2 `
+            -Force
+
+          # Desativar transparência
+          New-Item `
+            -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" `
+            -Name "EnableTransparency" `
+            -Type DWord `
+            -Value 0 `
+            -Force
+
+          Write-Host "Windows otimizado."
+
+      # ============================================
+      # LIMPEZA
+      # ============================================
+      - name: Clean Temporary Files
+        shell: powershell
+        run: |
+          Write-Host "Limpando arquivos temporários..."
+
+          Remove-Item `
+            "$env:TEMP\*" `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          Remove-Item `
+            "C:\Windows\Temp\*" `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          Write-Host "Limpeza concluída."
+
+      # ============================================
+      # STEAM
+      # ============================================
+      - name: Install Steam
+        shell: powershell
+        run: |
+          Write-Host "Baixando Steam..."
+
+          $steamUrl = "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe"
+          $steamInstaller = "$env:TEMP\SteamSetup.exe"
+
+          Invoke-WebRequest `
+            -Uri $steamUrl `
+            -OutFile $steamInstaller
+
+          if (-not (Test-Path $steamInstaller)) {
+              Write-Error "Steam não foi baixada."
               exit 1
           }
 
-          Write-Host "Usuário RDP criado."
+          Write-Host "Instalando Steam..."
 
+          $process = Start-Process `
+            -FilePath $steamInstaller `
+            -ArgumentList "/S" `
+            -Wait `
+            -PassThru
+
+          if ($process.ExitCode -ne 0) {
+              Write-Error "Falha ao instalar Steam. Código: $($process.ExitCode)"
+              exit 1
+          }
+
+          Remove-Item $steamInstaller -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Steam instalada."
+
+      # ============================================
+      # INFORMACOES DO PC
+      # ============================================
+      - name: Show PC Specifications
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "         GAMING PC INFORMATION"
+          Write-Host "========================================"
+
+          Write-Host ""
+          Write-Host "CPU:"
+          Get-CimInstance Win32_Processor |
+            Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+
+          Write-Host ""
+          Write-Host "RAM:"
+          $ram = Get-CimInstance Win32_ComputerSystem
+          Write-Host ("Total: {0:N2} GB" -f ($ram.TotalPhysicalMemory / 1GB))
+
+          Write-Host ""
+          Write-Host "GPU:"
+          Get-CimInstance Win32_VideoController |
+            Select-Object Name, DriverVersion
+
+          Write-Host ""
+          Write-Host "Discos:"
+          Get-CimInstance Win32_LogicalDisk |
+            Where-Object {$_.DriveType -eq 3} |
+            Select-Object DeviceID,
+              @{Name="SizeGB";Expression={[math]::Round($_.Size/1GB,2)}},
+              @{Name="FreeGB";Expression={[math]::Round($_.FreeSpace/1GB,2)}}
+
+          Write-Host ""
+          Write-Host "Windows:"
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object Caption, Version, OSArchitecture
+
+          Write-Host ""
+          Write-Host "========================================"
+
+      # ============================================
+      # TAILSCALE
+      # ============================================
       - name: Install Tailscale
         shell: powershell
         run: |
           Write-Host "Baixando Tailscale..."
 
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = Join-Path $env:TEMP "tailscale.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
 
           Invoke-WebRequest `
             -Uri $tsUrl `
             -OutFile $installerPath
 
-          if (-not (Test-Path $installerPath)) {
-              Write-Error "Falha ao baixar o instalador do Tailscale."
-              exit 1
-          }
-
-          Write-Host "Instalando Tailscale..."
-
-          $process = Start-Process `
-            -FilePath "msiexec.exe" `
+          Start-Process `
+            msiexec.exe `
             -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" `
-            -Wait `
-            -PassThru
-
-          if ($process.ExitCode -ne 0) {
-              Write-Error "Instalação do Tailscale falhou. Código: $($process.ExitCode)"
-              exit 1
-          }
+            -Wait
 
           Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
 
           Write-Host "Tailscale instalado."
 
+      # ============================================
+      # TAILSCALE CONNECTION
+      # ============================================
       - name: Establish Tailscale Connection
         shell: powershell
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          Write-Host "Localizando Tailscale..."
-
-          $tailscale = Join-Path `
-            $env:ProgramFiles `
-            "Tailscale\tailscale.exe"
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
 
           if (-not (Test-Path $tailscale)) {
-              Write-Error "tailscale.exe não encontrado em $tailscale"
+              Write-Error "tailscale.exe não encontrado."
               exit 1
           }
 
@@ -163,84 +331,79 @@ jobs:
             --hostname="gh-runner-$env:GITHUB_RUN_ID"
 
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "Falha ao conectar ao Tailscale."
+              Write-Error "Falha no Tailscale."
               exit 1
           }
 
-          Write-Host "Obtendo IP Tailscale..."
+          Start-Sleep -Seconds 5
 
-          $tsIP = $null
-          $retries = 0
-
-          while (-not $tsIP -and $retries -lt 20) {
-
-              $tsIP = (& $tailscale ip -4 2>$null).Trim()
-
-              if ($tsIP) {
-                  break
-              }
-
-              Write-Host "Aguardando IP..."
-
-              Start-Sleep -Seconds 5
-
-              $retries++
-          }
+          $tsIP = (& $tailscale ip -4 2>$null).Trim()
 
           if (-not $tsIP) {
-              Write-Error "Tailscale não recebeu um endereço IPv4."
+              Write-Error "Não foi possível obter o IP Tailscale."
               exit 1
           }
-
-          Write-Host "Tailscale IP: $tsIP"
 
           "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Verify RDP Accessibility
+          Write-Host "Tailscale IP: $tsIP"
+
+      # ============================================
+      # TESTE RDP
+      # ============================================
+      - name: Verify RDP
         shell: powershell
         run: |
-          Write-Host "Testando porta RDP..."
+          Write-Host "Testando RDP..."
 
-          Write-Host "IP: $env:TAILSCALE_IP"
-          Write-Host "Porta: 3389"
-
-          $testResult = Test-NetConnection `
+          $result = Test-NetConnection `
             -ComputerName $env:TAILSCALE_IP `
             -Port 3389 `
             -WarningAction SilentlyContinue
 
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "Não foi possível conectar à porta RDP 3389."
+          if (-not $result.TcpTestSucceeded) {
+              Write-Error "Porta 3389 não está acessível."
               exit 1
           }
 
-          Write-Host "RDP está acessível."
+          Write-Host "RDP funcionando."
 
+      # ============================================
+      # MOSTRAR LOGIN
+      # ============================================
       - name: Show RDP Information
         shell: powershell
         run: |
           Write-Host ""
           Write-Host "========================================"
-          Write-Host "           RDP ACCESS"
+          Write-Host "             GAMING RDP"
           Write-Host "========================================"
           Write-Host ""
-          Write-Host "Address:  $env:TAILSCALE_IP"
-          Write-Host "Port:     3389"
-          Write-Host "Username: $env:RDP_USERNAME"
-          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "IP:       $env:TAILSCALE_IP"
+          Write-Host "PORT:     3389"
+          Write-Host "USER:     $env:RDP_USERNAME"
+          Write-Host "PASSWORD: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "STEAM: INSTALLED"
+          Write-Host "GAME MODE: ENABLED"
+          Write-Host "HIGH PERFORMANCE: ENABLED"
           Write-Host ""
           Write-Host "========================================"
-          Write-Host ""
 
-      - name: Maintain Connection
+      # ============================================
+      # KEEP ALIVE
+      # ============================================
+      - name: Maintain Gaming PC
         shell: powershell
         run: |
-          Write-Host "RDP ativo."
-          Write-Host "O runner permanecerá ativo enquanto o workflow estiver executando."
+          Write-Host "========================================"
+          Write-Host " Gaming PC ativo."
+          Write-Host " Steam instalada."
+          Write-Host " RDP ativo."
+          Write-Host " Tailscale ativo."
+          Write-Host "========================================"
 
           while ($true) {
-
-              Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] RDP Active"
-
+              Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Gaming PC Active"
               Start-Sleep -Seconds 300
           }
