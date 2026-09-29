@@ -1,0 +1,635 @@
+name: RDP Gaming PC
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gaming-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+
+      # ============================================================
+      # 1. RDP
+      # ============================================================
+      - name: Configure RDP
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=== CONFIGURANDO RDP ==="
+
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" `
+            -Value 0 `
+            -Force
+
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name "UserAuthentication" `
+            -Value 0 `
+            -Force
+
+          # RDP com segurança de transporte padrão do Windows.
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name "SecurityLayer" `
+            -Value 1 `
+            -Force
+
+          # Habilitar UDP para reduzir latência quando disponível.
+          New-ItemProperty `
+            -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" `
+            -Name "SelectTransport" `
+            -PropertyType DWord `
+            -Value 1 `
+            -Force | Out-Null
+
+          # Firewall RDP
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
+
+          netsh advfirewall firewall add rule `
+            name="RDP-Tailscale" `
+            dir=in `
+            action=allow `
+            protocol=TCP `
+            localport=3389
+
+          netsh advfirewall firewall add rule `
+            name="RDP-Tailscale-UDP" `
+            dir=in `
+            action=allow `
+            protocol=UDP `
+            localport=3389
+
+          Restart-Service TermService -Force
+
+          Write-Host "RDP configurado."
+
+      # ============================================================
+      # 2. USUÁRIO RDP
+      # ============================================================
+      - name: Create RDP User
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=== CRIANDO USUARIO RDP ==="
+
+          $chars = (
+            [char[]](65..90) +
+            [char[]](97..122) +
+            [char[]](48..57) +
+            [char[]](33..47)
+          )
+
+          $password = -join (
+            1..24 | ForEach-Object {
+              $chars | Get-Random
+            }
+          )
+
+          $old = Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue
+
+          if ($old) {
+            Remove-LocalUser -Name "RDP"
+          }
+
+          $securePassword = ConvertTo-SecureString `
+            $password `
+            -AsPlainText `
+            -Force
+
+          New-LocalUser `
+            -Name "RDP" `
+            -Password $securePassword `
+            -AccountNeverExpires `
+            -PasswordNeverExpires `
+            -Description "Gaming RDP User"
+
+          Add-LocalGroupMember `
+            -Group "Administrators" `
+            -Member "RDP"
+
+          Add-LocalGroupMember `
+            -Group "Remote Desktop Users" `
+            -Member "RDP"
+
+          "RDP_USERNAME=RDP" >> $env:GITHUB_ENV
+          "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+
+          Write-Host "Usuario RDP criado."
+
+      # ============================================================
+      # 3. WINDOWS PERFORMANCE
+      # ============================================================
+      - name: Gaming Performance Optimization
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          Write-Host "=== OTIMIZANDO WINDOWS ==="
+
+          # Alto desempenho
+          powercfg /setactive SCHEME_MIN
+
+          # Desligar suspensão
+          powercfg /change standby-timeout-ac 0
+          powercfg /change monitor-timeout-ac 0
+          powercfg /change hibernate-timeout-ac 0
+
+          # Game Mode
+          New-Item `
+            "HKCU:\Software\Microsoft\GameBar" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            "HKCU:\Software\Microsoft\GameBar" `
+            -Name "AllowAutoGameMode" `
+            -Type DWord `
+            -Value 1 `
+            -Force
+
+          Set-ItemProperty `
+            "HKCU:\Software\Microsoft\GameBar" `
+            -Name "AutoGameModeEnabled" `
+            -Type DWord `
+            -Value 1 `
+            -Force
+
+          # Desativar Game DVR/captura em segundo plano
+          New-Item `
+            "HKCU:\System\GameConfigStore" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            "HKCU:\System\GameConfigStore" `
+            -Name "GameDVR_Enabled" `
+            -Type DWord `
+            -Value 0 `
+            -Force
+
+          New-Item `
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" `
+            -Name "AppCaptureEnabled" `
+            -Type DWord `
+            -Value 0 `
+            -Force
+
+          # Desativar transparência
+          New-Item `
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" `
+            -Name "EnableTransparency" `
+            -Type DWord `
+            -Value 0 `
+            -Force
+
+          # Reduzir animações
+          New-Item `
+            "HKCU:\Control Panel\Desktop" `
+            -Force | Out-Null
+
+          Set-ItemProperty `
+            "HKCU:\Control Panel\Desktop" `
+            -Name "MenuShowDelay" `
+            -Type String `
+            -Value "0" `
+            -Force
+
+          Write-Host "Otimizacao concluida."
+
+      # ============================================================
+      # 4. RDP GRAPHICS
+      # ============================================================
+      - name: Optimize RDP Graphics
+        shell: powershell
+        run: |
+          Write-Host "=== OTIMIZANDO GRAFICOS RDP ==="
+
+          $ts = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+
+          New-Item $ts -Force | Out-Null
+
+          # Habilitar H.264/AVC quando suportado
+          New-ItemProperty `
+            $ts `
+            -Name "AVC444ModePreferred" `
+            -PropertyType DWord `
+            -Value 1 `
+            -Force | Out-Null
+
+          # Usar hardware quando o host disponibilizar
+          New-ItemProperty `
+            $ts `
+            -Name "AVCHardwareEncodePreferred" `
+            -PropertyType DWord `
+            -Value 1 `
+            -Force | Out-Null
+
+          # Priorizar experiência de baixa latência
+          New-ItemProperty `
+            $ts `
+            -Name "SelectNetworkDetectionEnabled" `
+            -PropertyType DWord `
+            -Value 1 `
+            -Force | Out-Null
+
+          Write-Host "Configuracao grafica aplicada."
+
+      # ============================================================
+      # 5. LIMPEZA
+      # ============================================================
+      - name: Clean Temporary Files
+        shell: powershell
+        run: |
+          Write-Host "=== LIMPEZA ==="
+
+          Remove-Item `
+            "$env:TEMP\*" `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          Remove-Item `
+            "C:\Windows\Temp\*" `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          Write-Host "Limpeza concluida."
+
+      # ============================================================
+      # 6. CHROME
+      # ============================================================
+      - name: Install Google Chrome
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=== INSTALANDO CHROME ==="
+
+          winget install `
+            --id Google.Chrome `
+            --exact `
+            --silent `
+            --accept-package-agreements `
+            --accept-source-agreements `
+            --disable-interactivity
+
+          Write-Host "Chrome instalado."
+
+      # ============================================================
+      # 7. STEAM
+      # ============================================================
+      - name: Install Steam
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=== INSTALANDO STEAM ==="
+
+          $url = "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe"
+          $installer = "$env:TEMP\SteamSetup.exe"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $installer
+
+          if (-not (Test-Path $installer)) {
+            throw "SteamSetup.exe nao foi baixado."
+          }
+
+          $process = Start-Process `
+            -FilePath $installer `
+            -ArgumentList "/S" `
+            -Wait `
+            -PassThru
+
+          if ($process.ExitCode -ne 0) {
+            throw "Instalacao da Steam falhou: $($process.ExitCode)"
+          }
+
+          Remove-Item $installer -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Steam instalada."
+
+      # ============================================================
+      # 8. LUA TOOLS
+      # ============================================================
+      - name: Install LuaTools
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=== INSTALANDO LUATOOLS ==="
+
+          # LuaTools oficial para Windows.
+          # A pagina oficial disponibiliza o instalador Windows.
+          $page = Invoke-WebRequest `
+            -Uri "https://lua.tools/app" `
+            -UseBasicParsing
+
+          $matches = [regex]::Matches(
+            $page.Content,
+            'https?[^"\s]+\.exe'
+          )
+
+          $downloadUrl = $null
+
+          foreach ($m in $matches) {
+            if ($m.Value -match "lua") {
+              $downloadUrl = $m.Value
+              break
+            }
+          }
+
+          if (-not $downloadUrl) {
+            Write-Warning "URL automatica do instalador LuaTools nao encontrada."
+            Write-Host "LuaTools possui instalador oficial para Windows."
+            exit 0
+          }
+
+          Write-Host "Baixando LuaTools..."
+
+          $luaInstaller = "$env:TEMP\LuaToolsSetup.exe"
+
+          Invoke-WebRequest `
+            -Uri $downloadUrl `
+            -OutFile $luaInstaller
+
+          if (Test-Path $luaInstaller) {
+
+            $p = Start-Process `
+              -FilePath $luaInstaller `
+              -ArgumentList "/S" `
+              -Wait `
+              -PassThru
+
+            Write-Host "LuaTools ExitCode: $($p.ExitCode)"
+
+            Remove-Item `
+              $luaInstaller `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+      # ============================================================
+      # 9. STEAM REMOTE PLAY FIREWALL
+      # ============================================================
+      - name: Configure Steam Remote Play
+        shell: powershell
+        run: |
+          Write-Host "=== STEAM REMOTE PLAY ==="
+
+          # Remove regras antigas
+          netsh advfirewall firewall delete rule `
+            name="Steam Remote Play UDP" 2>$null
+
+          netsh advfirewall firewall delete rule `
+            name="Steam Remote Play TCP" 2>$null
+
+          # Steam Remote Play:
+          # UDP 27031,27036
+          # TCP 27036,27037
+
+          netsh advfirewall firewall add rule `
+            name="Steam Remote Play UDP" `
+            dir=in `
+            action=allow `
+            protocol=UDP `
+            localport=27031,27036
+
+          netsh advfirewall firewall add rule `
+            name="Steam Remote Play TCP" `
+            dir=in `
+            action=allow `
+            protocol=TCP `
+            localport=27036,27037
+
+          Write-Host "Portas do Steam Remote Play liberadas."
+
+      # ============================================================
+      # 10. START STEAM
+      # ============================================================
+      - name: Start Steam
+        shell: powershell
+        run: |
+          Write-Host "=== INICIANDO STEAM ==="
+
+          $steam = @(
+            "$env:ProgramFiles(x86)\Steam\steam.exe",
+            "$env:ProgramFiles\Steam\steam.exe"
+          ) | Where-Object {
+            Test-Path $_
+          } | Select-Object -First 1
+
+          if ($steam) {
+
+            Start-Process `
+              -FilePath $steam `
+              -ArgumentList "-silent"
+
+            Write-Host "Steam iniciada."
+
+          } else {
+            Write-Warning "Steam.exe nao encontrada."
+          }
+
+      # ============================================================
+      # 11. DIAGNOSTICO
+      # ============================================================
+      - name: Show PC Specifications
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "          GAMING RDP INFORMATION"
+          Write-Host "=========================================="
+
+          $cpu = Get-CimInstance Win32_Processor
+
+          Write-Host ""
+          Write-Host "CPU:"
+          Write-Host $cpu.Name
+          Write-Host "Cores: $($cpu.NumberOfCores)"
+          Write-Host "Threads: $($cpu.NumberOfLogicalProcessors)"
+
+          $ram = Get-CimInstance Win32_ComputerSystem
+
+          Write-Host ""
+          Write-Host "RAM:"
+          Write-Host ("{0:N2} GB" -f ($ram.TotalPhysicalMemory / 1GB))
+
+          Write-Host ""
+          Write-Host "GPU:"
+
+          Get-CimInstance Win32_VideoController |
+            Select-Object Name, DriverVersion |
+            Format-Table -AutoSize
+
+          Write-Host ""
+          Write-Host "Disco:"
+
+          Get-CimInstance Win32_LogicalDisk |
+            Where-Object DriveType -eq 3 |
+            Select-Object DeviceID,
+              @{N="TotalGB";E={[math]::Round($_.Size / 1GB,2)}},
+              @{N="FreeGB";E={[math]::Round($_.FreeSpace / 1GB,2)}} |
+            Format-Table -AutoSize
+
+          Write-Host ""
+          Write-Host "Windows:"
+
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object Caption, Version, OSArchitecture |
+            Format-Table -AutoSize
+
+          Write-Host ""
+          Write-Host "=========================================="
+
+      # ============================================================
+      # 12. TAILSCALE
+      # ============================================================
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=== TAILSCALE ==="
+
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $installer
+
+          $p = Start-Process `
+            msiexec.exe `
+            -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" `
+            -Wait `
+            -PassThru
+
+          if ($p.ExitCode -ne 0) {
+            throw "Tailscale falhou: $($p.ExitCode)"
+          }
+
+          Remove-Item $installer -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Tailscale instalado."
+
+      # ============================================================
+      # 13. CONNECT TAILSCALE
+      # ============================================================
+      - name: Connect Tailscale
+        shell: powershell
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tailscale)) {
+            throw "tailscale.exe nao encontrado."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTH_KEY)) {
+            throw "TAILSCALE_AUTH_KEY nao configurada nos Secrets."
+          }
+
+          & $tailscale up `
+            --authkey="$env:TAILSCALE_AUTH_KEY" `
+            --hostname="gaming-rdp-$env:GITHUB_RUN_ID"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao conectar Tailscale."
+          }
+
+          Start-Sleep -Seconds 5
+
+          $ip = (& $tailscale ip -4 2>$null).Trim()
+
+          if (-not $ip) {
+            throw "IP Tailscale nao encontrado."
+          }
+
+          "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+
+          Write-Host "Tailscale IP: $ip"
+
+      # ============================================================
+      # 14. TEST RDP
+      # ============================================================
+      - name: Test RDP
+        shell: powershell
+        run: |
+          Write-Host "=== TESTANDO RDP ==="
+
+          $test = Test-NetConnection `
+            -ComputerName $env:TAILSCALE_IP `
+            -Port 3389 `
+            -WarningAction SilentlyContinue
+
+          if (-not $test.TcpTestSucceeded) {
+            throw "RDP nao esta acessivel."
+          }
+
+          Write-Host "RDP OK."
+
+      # ============================================================
+      # 15. FINAL INFORMATION
+      # ============================================================
+      - name: Show Connection Information
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "================================================"
+          Write-Host "              GAMING RDP ONLINE"
+          Write-Host "================================================"
+          Write-Host ""
+          Write-Host "IP:       $env:TAILSCALE_IP"
+          Write-Host "PORT:     3389"
+          Write-Host "USER:     $env:RDP_USERNAME"
+          Write-Host "PASSWORD: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "INSTALLED:"
+          Write-Host "  Steam       : YES"
+          Write-Host "  Chrome      : YES"
+          Write-Host "  LuaTools    : YES/ATTEMPTED"
+          Write-Host "  Tailscale   : YES"
+          Write-Host ""
+          Write-Host "STEAM REMOTE PLAY:"
+          Write-Host "  UDP 27031"
+          Write-Host "  UDP 27036"
+          Write-Host "  TCP 27036"
+          Write-Host "  TCP 27037"
+          Write-Host ""
+          Write-Host "================================================"
+
+      # ============================================================
+      # 16. KEEP ALIVE
+      # ============================================================
+      - name: Keep Gaming PC Alive
+        shell: powershell
+        run: |
+          Write-Host "Gaming PC ativo."
+
+          while ($true) {
+
+            $time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+            Write-Host "[$time] RDP + Steam + Tailscale ativos"
+
+            Start-Sleep -Seconds 300
+          }
